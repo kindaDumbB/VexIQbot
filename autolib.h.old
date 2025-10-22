@@ -1,0 +1,166 @@
+#include "vex.h"
+#include "mtctllib.h"
+#include "notmine.h"
+using namespace vex;
+int drivet[2] = {1, 7};
+motor mt[13] {PORT1,PORT1,PORT2,PORT3,PORT4,PORT5,PORT6,PORT7,PORT8,PORT9,PORT10,PORT11,PORT12};
+inertial in;
+brain br;
+auto lcd = br.Screen;
+auto mo = nsUMTCTL::clUPMTCTL();
+
+int x = 0;
+int y = 0;
+int rotation = 0;
+double driveOffset = 0.0;
+
+
+int GetHeading() {
+
+        return static_cast<int>(in.heading());
+}
+//changed from int to double to hopfully fix the turning right issue, if it does not work switch notmine.h back to int. that should fix it
+void rotateto(double heading) {
+    br.playSound(soundType::powerDown);
+    printf("rotating to %d \n", heading);
+    if (GetHeading() == (int)heading) {
+        return;
+    }
+    else {
+
+        while (GetHeading() != (int)heading) {
+            lcd.clearLine(3);
+            lcd.setCursor(3,1);
+            lcd.print("%d, out of %d", GetHeading(), heading);
+            if (GetHeading() - 180 == (int)heading- 180){
+                printf("done");
+                break;
+            }
+            int error = heading - GetHeading();
+            // i have no clue whats happening here
+            if (error > 180) error -= 360;
+            if (error < -180) error += 360;
+            int power = error / 1; // tune this for anti jank
+            if (power > 0) {
+                power += 20; // minimum power to move motor
+            } else if (power < 0) {
+                power -= 20; // minimum power to move motor
+            }
+            mo.MoveGroup(drivet,2,power);
+            this_thread::sleep_for(10);
+        }
+        mo.StopGroup(drivet,2);
+    }
+    
+}
+void movefwd(double amt, int targetHeading) {
+    br.playSound(soundType::tada);
+    const int LEFT = -1;
+    const int RIGHT = 7;
+
+    while (amt > 1) {
+        int current = GetHeading();
+        int error = targetHeading - current;
+
+        // Normalize error to [-180, 180]
+        if (error > 180) error -= 360;
+        if (error < -180) error += 360;
+
+        int correction = error * 1.0;
+
+        int baseSpeed = 100;
+
+        // Apply offset correction
+        int leftSpeed = baseSpeed - correction - driveOffset;
+        int rightSpeed = baseSpeed + correction + driveOffset;
+
+        // Clamp speeds
+        if (leftSpeed > 100) leftSpeed = 100;
+        if (leftSpeed < -100) leftSpeed = -100;
+        if (rightSpeed > 100) rightSpeed = 100;
+        if (rightSpeed < -100) rightSpeed = -100;
+
+        mt[abs(LEFT)].setVelocity(leftSpeed, percent);
+        mt[abs(RIGHT)].setVelocity(rightSpeed, percent);
+        mt[abs(LEFT)].spin(directionType::rev);
+        mt[abs(RIGHT)].spin(directionType::fwd);
+
+        amt--;
+        this_thread::sleep_for(9);
+    }
+    mt[1].stop();
+    mt[7].stop();
+}
+
+
+
+
+
+//for this function only
+int xdis = 0;
+int ydis = 0;
+int rotationdis = 0;
+void gotopos(int xcord, int ycord, int rotation) {
+    //ROTATE TO PROPER GO DIRECTION
+    if (xcord == x && ycord == y) {
+        return;
+    }
+    xdis = xcord - x;
+    ydis = ycord - y;
+    printf("ditance to go: %d::%d \n", xdis, ydis);
+
+    rotateto(dir360(ydis,xdis));
+    this_thread::sleep_for(100);
+    x = x + xdis;
+    y = y + ydis; 
+    printf("%d", sqrt((xdis*xdis)+(ydis*ydis)));
+    this_thread::sleep_for(100);
+    movefwd(sqrt((xdis*xdis)+(ydis*ydis)), dir360(ydis,xdis));
+    this_thread::sleep_for(100);
+    rotateto(rotation);
+    
+}
+
+// initialization / calibration
+void ini() {
+    lcd.clearScreen();
+    lcd.setCursor(1, 1);
+    lcd.print("Calibrating...");
+
+    // Reset sensors
+    in.calibrate();
+    while (in.isCalibrating()) {
+        this_thread::sleep_for(50);
+    }
+
+    // Record initial heading
+    double startHeading = in.heading();
+
+    // Drive forward for a short time
+    int testSpeed = 50;
+    int testTime = 3000; // ms
+    mt[1].setVelocity(testSpeed, percent);
+    mt[7].setVelocity(testSpeed, percent);
+    mt[1].spin(directionType::rev);
+    mt[7].spin(directionType::fwd);
+    this_thread::sleep_for(testTime);
+    mt[1].stop();
+    mt[7].stop();
+
+    // Measure how much it turned
+    double endHeading = in.heading();
+    double drift = endHeading - startHeading;
+    if (drift > 180) drift -= 360;
+    if (drift < -180) drift += 360;
+
+    // Compute offset (empirical tuning)
+    driveOffset = drift * 0.5; // scaling factor, tune as needed
+
+    lcd.clearLine(2);
+    lcd.setCursor(2, 1);
+    lcd.print("Drift: %.2f", drift);
+    lcd.setCursor(3, 1);
+    lcd.print("Offset: %.2f", driveOffset);
+
+    printf("Drive calibration complete. Drift = %.2f°, Offset = %.2f\n", drift, driveOffset);
+}
